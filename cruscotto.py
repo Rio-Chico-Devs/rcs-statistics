@@ -176,10 +176,81 @@ def _analizza_movimenti(movimenti, giacenza_attuale, oggi):
     }
 
 
+STORICO_PREZZI_PATH = os.path.join(CARTELLA_PROGETTO, "storico_prezzi.json")
+
+
+def _carica_storico_prezzi():
+    if not os.path.isfile(STORICO_PREZZI_PATH):
+        return {}
+    try:
+        with open(STORICO_PREZZI_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _salva_storico_prezzi(storico):
+    try:
+        with open(STORICO_PREZZI_PATH, "w", encoding="utf-8") as f:
+            json.dump(storico, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
+def aggiorna_storico_prezzi(righe_magazzino, oggi):
+    """Registra un nuovo scatto di prezzo fornitore per materiale, ma solo se
+    e' cambiato rispetto all'ultima rilevazione salvata.
+
+    Il database del gestionale non tiene nessuno storico dei prezzi (solo il
+    valore attuale): gli aumenti gia' avvenuti non sono recuperabili in
+    nessun modo. Questo file (proprio del Cruscotto, mai il DB del
+    gestionale) e' l'unico modo per iniziare a costruirne uno da qui in
+    avanti - una rilevazione per ogni cambio di prezzo osservato, non per
+    ogni generazione del report, altrimenti si riempirebbe di doppioni.
+    """
+    storico = _carica_storico_prezzi()
+    cambiato = False
+    for riga in righe_magazzino:
+        prezzo_attuale = riga["prezzo_fornitore_medio"]
+        if prezzo_attuale <= 0:
+            continue
+        chiave = str(riga["materiale_id"])
+        voci = storico.setdefault(chiave, [])
+        if not voci or round(voci[-1]["prezzo_fornitore"], 2) != round(prezzo_attuale, 2):
+            voci.append({"data": oggi.isoformat(), "prezzo_fornitore": round(prezzo_attuale, 2)})
+            cambiato = True
+    if cambiato:
+        _salva_storico_prezzi(storico)
+    return storico
+
+
+def _analizza_storico_prezzo(voci):
+    if not voci:
+        return {
+            "n_rilevazioni_prezzo": 0,
+            "primo_prezzo_rilevato": None,
+            "prima_rilevazione_prezzo": None,
+            "variazione_prezzo_pct": None,
+        }
+    primo = voci[0]
+    variazione = None
+    if len(voci) >= 2 and primo["prezzo_fornitore"] > 0:
+        variazione = round(
+            (voci[-1]["prezzo_fornitore"] - primo["prezzo_fornitore"]) / primo["prezzo_fornitore"] * 100, 1
+        )
+    return {
+        "n_rilevazioni_prezzo": len(voci),
+        "primo_prezzo_rilevato": primo["prezzo_fornitore"],
+        "prima_rilevazione_prezzo": primo["data"],
+        "variazione_prezzo_pct": variazione,
+    }
+
+
 def estrai_magazzino(conn, oggi=None):
     """Una riga per materiale: giacenza attuale (sommata sui fornitori, non
     dalla colonna materiali.giacenza che nel DB del gestionale resta sempre a
-    0), soglie di scorta, e l'analisi di consumo/restock/autonomia.
+    0), soglie di scorta, l'analisi di consumo/restock/autonomia, e lo
+    storico prezzi fornitore raccolto autonomamente dal Cruscotto.
     """
     if oggi is None:
         oggi = datetime.now()
@@ -237,6 +308,12 @@ def estrai_magazzino(conn, oggi=None):
         }
         riga.update(analisi)
         righe.append(riga)
+
+    storico_prezzi = aggiorna_storico_prezzi(righe, oggi)
+    for riga in righe:
+        voci = storico_prezzi.get(str(riga["materiale_id"]), [])
+        riga.update(_analizza_storico_prezzo(voci))
+
     return righe
 
 
@@ -492,10 +569,11 @@ header.testata {
 .kpi.visibile { opacity: 1; transform: translateY(0); }
 .kpi .etichetta { color: var(--muto); font-size: 12px; margin-bottom: 8px; }
 .kpi .valore { font-size: 24px; font-weight: 700; }
-.kpi .delta { font-size: 12px; margin-top: 6px; display: inline-flex; align-items: center; gap: 4px; }
-.kpi .delta.su { color: var(--verde); }
-.kpi .delta.giu { color: var(--rosso); }
-.kpi .delta.neutro { color: var(--muto); }
+.delta { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.kpi .delta { margin-top: 6px; }
+.delta.su { color: var(--verde); }
+.delta.giu { color: var(--rosso); }
+.delta.neutro { color: var(--muto); }
 
 .blocchi-sintesi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 @media (max-width: 900px) { .blocchi-sintesi { grid-template-columns: 1fr; } }
@@ -619,6 +697,17 @@ footer.piede { text-align: center; color: var(--muto); font-size: 12px; padding:
         <tbody id="corpoTabellaRicarico"></tbody>
       </table>
     </div>
+  </div>
+
+  <div class="sezione">
+    <h2>Storico prezzi fornitore <span class="nota-periodo">rilevato dal Cruscotto, non recuperabile da prima</span></h2>
+    <div class="tabella-scroll" style="margin-bottom:14px;">
+      <table>
+        <thead><tr><th>Materiale</th><th class="num">Primo prezzo rilevato</th><th class="num">Ultimo prezzo rilevato</th><th class="num">Variazione</th></tr></thead>
+        <tbody id="corpoTabellaStoricoPrezzi"></tbody>
+      </table>
+    </div>
+    <div id="notaStoricoPrezzi" class="suggerimento"></div>
   </div>
 
   <div class="sezione" id="sezioneFornitori" style="display:none;">
@@ -1027,6 +1116,16 @@ function disegnaConsigliMagazzino() {
     suggerimenti.push('Il consumo di ' + esc(m.nome) + ' è aumentato in modo marcato nell\'ultimo mese (' + formattaNumero(m.consumo_ultimi_30gg, 0) + ' unità contro ' + formattaNumero(m.consumo_30_60gg_fa, 0) + ' nel mese precedente): valuta di alzare la scorta minima.');
   });
 
+  // Aumenti di prezzo fornitore: indipendenti da dati_sufficienti (quel flag
+  // riguarda i movimenti di magazzino, non le rilevazioni di prezzo).
+  DATI.magazzino
+    .filter(function (m) { return m.n_rilevazioni_prezzo >= 2 && m.variazione_prezzo_pct > 8; })
+    .sort(function (a, b) { return b.variazione_prezzo_pct - a.variazione_prezzo_pct; })
+    .slice(0, 3)
+    .forEach(function (m) {
+      suggerimenti.push('Il prezzo fornitore di ' + esc(m.nome) + ' è salito del ' + formattaNumero(m.variazione_prezzo_pct, 0) + '% da quando lo monitoriamo (dal ' + formattaData(m.prima_rilevazione_prezzo) + '): valuta di rivedere il prezzo di vendita o cercare un\'alternativa.');
+    });
+
   DATI.confronto_fornitori
     .filter(function (c) { return c.risparmio_pct > 15; })
     .slice(0, 3)
@@ -1076,6 +1175,29 @@ function disegnaTabellaRicarico() {
   }).join('');
 }
 
+function disegnaStoricoPrezzi() {
+  var conVariazione = DATI.magazzino.filter(function (m) { return m.n_rilevazioni_prezzo >= 2; });
+  var inMonitoraggio = DATI.magazzino.filter(function (m) { return m.n_rilevazioni_prezzo === 1; });
+
+  conVariazione.sort(function (a, b) { return Math.abs(b.variazione_prezzo_pct) - Math.abs(a.variazione_prezzo_pct); });
+  document.getElementById('corpoTabellaStoricoPrezzi').innerHTML = conVariazione.map(function (m) {
+    var classeVar = m.variazione_prezzo_pct > 0 ? 'giu' : (m.variazione_prezzo_pct < 0 ? 'su' : 'neutro');
+    return '<tr><td>' + esc(m.nome) + '</td>' +
+      '<td class="num">' + formattaEuro(m.primo_prezzo_rilevato) + ' <span class="testo-muto">(' + formattaData(m.prima_rilevazione_prezzo) + ')</span></td>' +
+      '<td class="num">' + formattaEuro(m.prezzo_fornitore_medio) + '</td>' +
+      '<td class="num"><span class="delta ' + classeVar + '">' + (m.variazione_prezzo_pct > 0 ? '+' : '') + formattaNumero(m.variazione_prezzo_pct, 1) + '%</span></td></tr>';
+  }).join('');
+
+  var nota = document.getElementById('notaStoricoPrezzi');
+  if (conVariazione.length === 0) {
+    nota.innerHTML = 'Il monitoraggio dei prezzi fornitore è appena iniziato: nessuna variazione ancora osservata su ' + inMonitoraggio.length + ' material' + (inMonitoraggio.length === 1 ? 'e' : 'i') + '. Le variazioni compariranno qui a partire dal prossimo cambio di prezzo registrato (il gestionale non conserva lo storico, quindi gli aumenti già avvenuti in passato non sono recuperabili).';
+  } else if (inMonitoraggio.length > 0) {
+    nota.innerHTML = 'Altri ' + inMonitoraggio.length + ' material' + (inMonitoraggio.length === 1 ? 'e è' : 'i sono') + ' monitorat' + (inMonitoraggio.length === 1 ? 'o' : 'i') + ' ma non ha' + (inMonitoraggio.length === 1 ? '' : 'nno') + ' ancora mostrato variazioni di prezzo.';
+  } else {
+    nota.style.display = 'none';
+  }
+}
+
 function disegnaTabellaFornitori() {
   if (DATI.confronto_fornitori.length === 0) return;
   document.getElementById('sezioneFornitori').style.display = '';
@@ -1116,6 +1238,7 @@ function creaGraficiStatici() {
   disegnaMaterialiUsati();
   disegnaClienti();
   disegnaTabellaRicarico();
+  disegnaStoricoPrezzi();
   disegnaTabellaFornitori();
   disegnaTabellaMovimenti();
   disegnaNotiziario();
