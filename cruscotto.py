@@ -64,7 +64,6 @@ def estrai_preventivi(conn):
         costo_materiali = _num(r["costo_totale_materiali"])
         mano_opera = _num(r["tot_mano_opera"])
         costo_totale = costo_materiali + _num(r["costi_accessori"]) + mano_opera
-        margine_pct = round((prezzo - costo_totale) / prezzo * 100, 2) if prezzo > 0 else 0.0
         righe.append(
             {
                 "id": r["id"],
@@ -74,7 +73,7 @@ def estrai_preventivi(conn):
                 "prezzo": round(prezzo, 2),
                 "costo_materiali": round(costo_materiali, 2),
                 "mano_opera": round(mano_opera, 2),
-                "margine_pct": margine_pct,
+                "costo_totale": round(costo_totale, 2),
             }
         )
     return righe
@@ -95,6 +94,7 @@ def _analizza_movimenti(movimenti, giacenza_attuale, oggi):
             "n_movimenti": 0,
             "dati_sufficienti": False,
             "consumo_ultimi_30gg": 0.0,
+            "consumo_30_60gg_fa": 0.0,
             "trend_consumo_pct": None,
             "velocita_consumo_giorno": 0.0,
             "giorni_autonomia_stimati": None,
@@ -151,10 +151,21 @@ def _analizza_movimenti(movimenti, giacenza_attuale, oggi):
 
     dati_sufficienti = n_movimenti >= SOGLIA_MOVIMENTI_MINIMI and giorni_storico >= SOGLIA_GIORNI_STORICO_MINIMI
 
+    # Con pochi movimenti l'estrapolazione (specie l'autonomia, che divide la
+    # giacenza per una velocita' calcolata su 1-2 eventi) puo' produrre numeri
+    # assurdi (es. "1328 giorni di autonomia" da un singolo scarico isolato).
+    # Se i dati non sono sufficienti non li mostriamo proprio, invece di
+    # lasciare che un valore fuorviante conviva con il badge "dati insufficienti".
+    if not dati_sufficienti:
+        trend_pct = None
+        giorni_autonomia = None
+        tempo_medio_restock = None
+
     return {
         "n_movimenti": n_movimenti,
         "dati_sufficienti": dati_sufficienti,
         "consumo_ultimi_30gg": round(consumo_30, 2),
+        "consumo_30_60gg_fa": round(consumo_30_60, 2),
         "trend_consumo_pct": trend_pct,
         "velocita_consumo_giorno": round(velocita_recente, 3),
         "giorni_autonomia_stimati": giorni_autonomia,
@@ -564,8 +575,8 @@ footer.piede { text-align: center; color: var(--muto); font-size: 12px; padding:
   <div class="sezione">
     <h2>Magazzino &middot; analisi intelligente <span class="nota-periodo">storico completo, consumo e riordino</span></h2>
     <div class="griglia-2" style="margin-bottom:20px;">
-      <div class="contenitore-grafico" style="height:$ALTEZZA_GRAFICO_MAGAZZINOpx;"><canvas id="graficoGiacenze"></canvas></div>
-      <div class="contenitore-grafico" style="height:$ALTEZZA_GRAFICO_AUTONOMIApx;"><canvas id="graficoAutonomia"></canvas></div>
+      <div class="contenitore-grafico" style="height:${ALTEZZA_GRAFICO_MAGAZZINO}px;"><canvas id="graficoGiacenze"></canvas></div>
+      <div class="contenitore-grafico" style="height:${ALTEZZA_GRAFICO_AUTONOMIA}px;"><canvas id="graficoAutonomia"></canvas></div>
     </div>
     <div class="tabella-scroll" style="margin-bottom:18px;">
       <table>
@@ -751,16 +762,20 @@ function periodoAdiacente(chiave, periodo, offset) {
 }
 
 function aggrega(periodo) {
+  // Il margine e' ponderato sul fatturato (totale ricavi - totale costi),
+  // non la media delle percentuali per preventivo: un singolo preventivo con
+  // prezzo quasi zero (es. una voce di test) altrimenti farebbe esplodere la
+  // media del periodo pur pesando pochissimo sul fatturato reale.
   var gruppi = {};
   DATI.preventivi.forEach(function (p) {
     var chiave = chiavePeriodo(p.data, periodo);
     if (!gruppi[chiave]) {
-      gruppi[chiave] = { chiave: chiave, n: 0, valore: 0, margineSomma: 0, costoMateriali: 0, manoOpera: 0 };
+      gruppi[chiave] = { chiave: chiave, n: 0, valore: 0, costoTotale: 0, costoMateriali: 0, manoOpera: 0 };
     }
     var g = gruppi[chiave];
     g.n += 1;
     g.valore += p.prezzo;
-    g.margineSomma += p.margine_pct;
+    g.costoTotale += p.costo_totale;
     g.costoMateriali += p.costo_materiali;
     g.manoOpera += p.mano_opera;
   });
@@ -768,7 +783,7 @@ function aggrega(periodo) {
     var g = gruppi[k];
     return {
       chiave: k, etichetta: etichettaPeriodo(k, periodo), n: g.n, valore: g.valore,
-      margineMedio: g.n > 0 ? g.margineSomma / g.n : 0,
+      margineMedio: g.valore > 0 ? (g.valore - g.costoTotale) / g.valore * 100 : 0,
       prezzoMedio: g.n > 0 ? g.valore / g.n : 0,
       costoMateriali: g.costoMateriali, manoOpera: g.manoOpera
     };
@@ -981,14 +996,20 @@ function disegnaConsigliMagazzino() {
   var buonRicambio = affidabili.filter(function (m) { return m.tempo_medio_restock_giorni !== null && m.giorni_autonomia_stimati !== null && m.giorni_autonomia_stimati > m.tempo_medio_restock_giorni * 1.5; });
   if (buonRicambio.length > 0) puntiForza.push('Per ' + buonRicambio.length + ' material' + (buonRicambio.length === 1 ? 'e' : 'i') + ' l\'autonomia residua è ampiamente superiore ai tempi di restock abituali.');
 
+  var candidatiTrend = [];
   affidabili.forEach(function (m) {
     if (m.sotto_scorta) {
       puntiAttenzione.push(esc(m.nome) + ' è sotto scorta minima (giacenza ' + formattaNumero(m.giacenza, 1) + ' contro un minimo di ' + formattaNumero(m.scorta_minima, 0) + ').');
     } else if (m.giorni_autonomia_stimati !== null && m.giorni_autonomia_stimati < 14) {
       puntiAttenzione.push(esc(m.nome) + ' si esaurirà fra circa ' + formattaNumero(m.giorni_autonomia_stimati, 0) + ' giorni al ritmo di consumo attuale.');
     }
-    if (m.trend_consumo_pct !== null && m.trend_consumo_pct > 40) {
-      suggerimenti.push('Il consumo di ' + esc(m.nome) + ' è aumentato del ' + formattaNumero(m.trend_consumo_pct, 0) + '% nell\'ultimo mese: valuta di alzare la scorta minima.');
+    // La percentuale di trend e' inaffidabile quando la base di partenza
+    // (consumo nei 30-60gg precedenti) e' vicina a zero: qualunque consumo
+    // recente sembrerebbe un'impennata del +500%. La confrontiamo con un
+    // minimo assoluto legato alla scorta minima prima di fidarcene.
+    var baseMinima = Math.max(m.scorta_minima * 0.15, 3);
+    if (m.trend_consumo_pct !== null && m.trend_consumo_pct > 40 && m.consumo_30_60gg_fa >= baseMinima) {
+      candidatiTrend.push(m);
     }
     if (m.tempo_medio_restock_giorni !== null && m.giorni_autonomia_stimati !== null && m.giorni_autonomia_stimati < m.tempo_medio_restock_giorni) {
       suggerimenti.push('Per ' + esc(m.nome) + ' il tempo medio di restock (' + formattaNumero(m.tempo_medio_restock_giorni, 0) + ' gg) supera l\'autonomia stimata (' + formattaNumero(m.giorni_autonomia_stimati, 0) + ' gg): rischio di rimanere senza materiale prima che arrivi il riordino, valuta di anticipare l\'ordine o cercare un fornitore più rapido.');
@@ -998,11 +1019,19 @@ function disegnaConsigliMagazzino() {
     }
   });
 
-  DATI.confronto_fornitori.forEach(function (c) {
-    if (c.risparmio_pct > 15) {
-      suggerimenti.push('Per ' + esc(c.nome) + ' un fornitore alternativo costa il ' + formattaNumero(c.risparmio_pct, 0) + '% in meno rispetto al più caro: valuta di spostare gli ordini.');
-    }
+  // Al massimo le 3 impennate di consumo piu' consistenti in volume: evita
+  // che una lunga lista di percentuali simili copra i consigli piu' concreti.
+  candidatiTrend.sort(function (a, b) { return b.consumo_ultimi_30gg - a.consumo_ultimi_30gg; });
+  candidatiTrend.slice(0, 3).forEach(function (m) {
+    suggerimenti.push('Il consumo di ' + esc(m.nome) + ' è aumentato in modo marcato nell\'ultimo mese (' + formattaNumero(m.consumo_ultimi_30gg, 0) + ' unità contro ' + formattaNumero(m.consumo_30_60gg_fa, 0) + ' nel mese precedente): valuta di alzare la scorta minima.');
   });
+
+  DATI.confronto_fornitori
+    .filter(function (c) { return c.risparmio_pct > 15; })
+    .slice(0, 3)
+    .forEach(function (c) {
+      suggerimenti.push('Per ' + esc(c.nome) + ' un fornitore alternativo costa il ' + formattaNumero(c.risparmio_pct, 0) + '% in meno rispetto al più caro: valuta di spostare gli ordini.');
+    });
 
   var senzaDati = DATI.magazzino.filter(function (m) { return !m.dati_sufficienti; });
   if (senzaDati.length > 0) {
