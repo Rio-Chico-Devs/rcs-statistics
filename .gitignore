@@ -1,6 +1,7 @@
 config.json
 notiziario_ultimo.json
 storico_prezzi.json
+cruscotto.log
 report/
 assets/
 __pycache__/

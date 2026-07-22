@@ -12,7 +12,9 @@ Uso:
 
 import json
 import os
+import sqlite3
 import sys
+import traceback
 import urllib.request
 import webbrowser
 from datetime import datetime
@@ -21,6 +23,25 @@ from string import Template
 from config_db import ConfigDbError, apri_db_sola_lettura, cambia_percorso_db, risolvi_percorso_db
 
 CARTELLA_PROGETTO = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(CARTELLA_PROGETTO, "cruscotto.log")
+
+
+def _log(messaggio, dettaglio=""):
+    """Appende una riga al log del Cruscotto (a fianco dell'eseguibile).
+
+    Quando il programma gira come .exe lanciato con doppio clic, la console
+    si chiude subito e i messaggi a video svaniscono: un file di log e'
+    l'unico modo per capire cosa e' andato storto dopo il fatto. La
+    scrittura non deve mai far fallire il programma, quindi ogni errore di
+    I/O sul log stesso viene ignorato.
+    """
+    try:
+        with open(LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(datetime.now().isoformat(timespec="seconds") + "  " + messaggio + "\n")
+            if dettaglio:
+                f.write(dettaglio.rstrip() + "\n")
+    except OSError:
+        pass
 
 CHARTJS_VERSION = "4.4.9"
 CHARTJS_URL = "https://cdn.jsdelivr.net/npm/chart.js@" + CHARTJS_VERSION + "/dist/chart.umd.min.js"
@@ -112,10 +133,13 @@ def _analizza_movimenti(movimenti, giacenza_attuale, oggi):
     giorni_storico = max((ultimo - primo).days, 1)
 
     def scarico_entro(giorni_min, giorni_max):
+        # Intervallo semiaperto [giorni_min, giorni_max): cosi' i movimenti di
+        # oggi (eta==0) rientrano nella prima finestra invece di sparire, e i
+        # due bucket (0-30 e 30-60) non si sovrappongono sul confine.
         totale = 0.0
         for m in scarichi:
             eta = (oggi - datetime.fromisoformat(m["data"])).days
-            if giorni_min < eta <= giorni_max:
+            if giorni_min <= eta < giorni_max:
                 totale += m["quantita"]
         return totale
 
@@ -126,7 +150,13 @@ def _analizza_movimenti(movimenti, giacenza_attuale, oggi):
     consumo_30_60 = scarico_entro(30, 60)
     consumo_60 = consumo_30 + consumo_30_60
 
-    velocita_recente = (consumo_60 / 60.0) if consumo_60 > 0 else velocita_storica
+    # La velocita' recente va divisa per i giorni realmente coperti dallo
+    # storico, non sempre per 60: un materiale visto per la prima volta 20
+    # giorni fa, diviso per 60, avrebbe una velocita' sottostimata e quindi
+    # un'autonomia gonfiata. Cap a 60 giorni (la finestra "recente"), ma mai
+    # piu' dei giorni effettivi di storico.
+    giorni_finestra = min(60, giorni_storico)
+    velocita_recente = (consumo_60 / giorni_finestra) if consumo_60 > 0 else velocita_storica
 
     trend_pct = (
         round((consumo_30 - consumo_30_60) / consumo_30_60 * 100, 1)
@@ -184,9 +214,16 @@ def _carica_storico_prezzi():
         return {}
     try:
         with open(STORICO_PREZZI_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (OSError, json.JSONDecodeError):
+            dati = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        _log("storico_prezzi.json illeggibile, riparto da vuoto: " + str(e))
         return {}
+    # Difesa contro un file manomesso o di vecchio formato: deve essere un
+    # dizionario {materiale_id: [rilevazioni]}, altrimenti lo ignoriamo.
+    if not isinstance(dati, dict):
+        _log("storico_prezzi.json non e' un oggetto JSON, ignorato")
+        return {}
+    return dati
 
 
 def _salva_storico_prezzi(storico):
@@ -216,7 +253,10 @@ def aggiorna_storico_prezzi(righe_magazzino, oggi):
             continue
         chiave = str(riga["materiale_id"])
         voci = storico.setdefault(chiave, [])
-        if not voci or round(voci[-1]["prezzo_fornitore"], 2) != round(prezzo_attuale, 2):
+        if not isinstance(voci, list):
+            voci = storico[chiave] = []
+        ultimo = voci[-1].get("prezzo_fornitore") if voci and isinstance(voci[-1], dict) else None
+        if ultimo is None or round(_num(ultimo), 2) != round(prezzo_attuale, 2):
             voci.append({"data": oggi.isoformat(), "prezzo_fornitore": round(prezzo_attuale, 2)})
             cambiato = True
     if cambiato:
@@ -225,6 +265,7 @@ def aggiorna_storico_prezzi(righe_magazzino, oggi):
 
 
 def _analizza_storico_prezzo(voci):
+    voci = [v for v in voci if isinstance(v, dict) and "prezzo_fornitore" in v]
     if not voci:
         return {
             "n_rilevazioni_prezzo": 0,
@@ -232,16 +273,15 @@ def _analizza_storico_prezzo(voci):
             "prima_rilevazione_prezzo": None,
             "variazione_prezzo_pct": None,
         }
-    primo = voci[0]
+    primo_prezzo = _num(voci[0]["prezzo_fornitore"])
+    ultimo_prezzo = _num(voci[-1]["prezzo_fornitore"])
     variazione = None
-    if len(voci) >= 2 and primo["prezzo_fornitore"] > 0:
-        variazione = round(
-            (voci[-1]["prezzo_fornitore"] - primo["prezzo_fornitore"]) / primo["prezzo_fornitore"] * 100, 1
-        )
+    if len(voci) >= 2 and primo_prezzo > 0:
+        variazione = round((ultimo_prezzo - primo_prezzo) / primo_prezzo * 100, 1)
     return {
         "n_rilevazioni_prezzo": len(voci),
-        "primo_prezzo_rilevato": primo["prezzo_fornitore"],
-        "prima_rilevazione_prezzo": primo["data"],
+        "primo_prezzo_rilevato": round(primo_prezzo, 2),
+        "prima_rilevazione_prezzo": voci[0].get("data"),
         "variazione_prezzo_pct": variazione,
     }
 
@@ -249,8 +289,11 @@ def _analizza_storico_prezzo(voci):
 def estrai_magazzino(conn, oggi=None):
     """Una riga per materiale: giacenza attuale (sommata sui fornitori, non
     dalla colonna materiali.giacenza che nel DB del gestionale resta sempre a
-    0), soglie di scorta, l'analisi di consumo/restock/autonomia, e lo
-    storico prezzi fornitore raccolto autonomamente dal Cruscotto.
+    0), soglie di scorta e l'analisi di consumo/restock/autonomia.
+
+    Funzione di sola lettura, senza effetti collaterali: l'annotazione dello
+    storico prezzi (che scrive su disco) e' fatta a parte in ``genera()``,
+    per non nascondere una scrittura dentro una ``estrai_*``.
     """
     if oggi is None:
         oggi = datetime.now()
@@ -287,8 +330,12 @@ def estrai_magazzino(conn, oggi=None):
         scorta_minima = round(_num(m["scorta_minima"]), 2)
         scorta_massima = round(_num(m["scorta_massima"]), 2)
         capacita = _num(m["capacita_magazzino"]) or _num(m["cat_capacita"]) or scorta_massima
+        # Solo i fornitori con un prezzo reale (>0): una riga fornitore a
+        # prezzo 0 (capita nel gestionale) altrimenti abbasserebbe la media e
+        # falserebbe sia il capitale a magazzino sia lo storico prezzi.
+        prezzi_validi = [_num(f["prezzo_fornitore"]) for f in forn if _num(f["prezzo_fornitore"]) > 0]
         prezzo_fornitore_medio = (
-            round(sum(_num(f["prezzo_fornitore"]) for f in forn) / len(forn), 2) if forn else 0.0
+            round(sum(prezzi_validi) / len(prezzi_validi), 2) if prezzi_validi else 0.0
         )
 
         movimenti = movimenti_per_materiale.get(m["id"], [])
@@ -309,12 +356,18 @@ def estrai_magazzino(conn, oggi=None):
         riga.update(analisi)
         righe.append(riga)
 
-    storico_prezzi = aggiorna_storico_prezzi(righe, oggi)
-    for riga in righe:
+    return righe
+
+
+def annota_storico_prezzi(righe_magazzino, storico_prezzi):
+    """Aggiunge a ogni riga di magazzino i campi derivati dallo storico prezzi
+    (numero rilevazioni, primo prezzo, variazione). Sola lettura del dict gia'
+    caricato: nessuna scrittura, nessun I/O.
+    """
+    for riga in righe_magazzino:
         voci = storico_prezzi.get(str(riga["materiale_id"]), [])
         riga.update(_analizza_storico_prezzo(voci))
-
-    return righe
+    return righe_magazzino
 
 
 def estrai_confronto_fornitori(conn):
@@ -741,6 +794,10 @@ footer.piede { text-align: center; color: var(--muto); font-size: 12px; padding:
 $TAG_CHARTJS
 <script>
 var DATI = $JSON_DATI;
+// Data in cui il report e' stato generato: il "periodo corrente" dei KPI si
+// ancora a questa, non all'orologio del browser, cosi' il report resta
+// statico e mostra sempre gli stessi numeri anche se aperto mesi dopo.
+var DATA_GENERAZIONE_ISO = '$DATA_ISO';
 var graficiAttivi = {};
 var periodoCorrente = 'mese';
 
@@ -885,7 +942,7 @@ function calcolaDelta(attuale, precedente) {
   return ((attuale - precedente) / Math.abs(precedente)) * 100;
 }
 
-function kpiCard(id, etichetta, valoreTesto, valoreNumerico, formattatore, deltaPct) {
+function kpiCard(id, etichetta, deltaPct) {
   var classeDelta = 'neutro';
   var freccia = '—';
   var testoDelta = 'nessun confronto disponibile';
@@ -904,12 +961,12 @@ function kpiCard(id, etichetta, valoreTesto, valoreNumerico, formattatore, delta
 function disegnaGrigliaKpi(corrente, precedente, capitaleMagazzino, materialiSottoScorta) {
   var contenitore = document.getElementById('grigliaKpi');
   contenitore.innerHTML =
-    kpiCard('NPrev', 'N. preventivi', '', corrente.n, null, calcolaDelta(corrente.n, precedente ? precedente.n : null)) +
-    kpiCard('Valore', 'Valore preventivato', '', corrente.valore, null, calcolaDelta(corrente.valore, precedente ? precedente.valore : null)) +
-    kpiCard('Margine', 'Margine medio', '', corrente.margineMedio, null, calcolaDelta(corrente.margineMedio, precedente ? precedente.margineMedio : null)) +
-    kpiCard('Prezzo', 'Prezzo medio', '', corrente.prezzoMedio, null, calcolaDelta(corrente.prezzoMedio, precedente ? precedente.prezzoMedio : null)) +
-    kpiCard('Capitale', 'Capitale a magazzino', '', capitaleMagazzino, null, null) +
-    kpiCard('SottoScorta', 'Materiali sotto scorta', '', materialiSottoScorta, null, null);
+    kpiCard('NPrev', 'N. preventivi', calcolaDelta(corrente.n, precedente ? precedente.n : null)) +
+    kpiCard('Valore', 'Valore preventivato', calcolaDelta(corrente.valore, precedente ? precedente.valore : null)) +
+    kpiCard('Margine', 'Margine medio', calcolaDelta(corrente.margineMedio, precedente ? precedente.margineMedio : null)) +
+    kpiCard('Prezzo', 'Prezzo medio', calcolaDelta(corrente.prezzoMedio, precedente ? precedente.prezzoMedio : null)) +
+    kpiCard('Capitale', 'Capitale a magazzino', null) +
+    kpiCard('SottoScorta', 'Materiali sotto scorta', null);
 
   animaNumero(document.getElementById('valoreKpiNPrev'), corrente.n, function (v) { return formattaNumero(v, 0); });
   animaNumero(document.getElementById('valoreKpiValore'), corrente.valore, formattaEuro);
@@ -1006,7 +1063,7 @@ function aggiornaTutto(periodo) {
   var serie = aggrega(periodo);
   var mappa = {};
   serie.forEach(function (g) { mappa[g.chiave] = g; });
-  var chiaveOra = chiavePeriodo(new Date().toISOString(), periodo);
+  var chiaveOra = chiavePeriodo(DATA_GENERAZIONE_ISO, periodo);
   var corrente = mappa[chiaveOra] || { n: 0, valore: 0, margineMedio: 0, prezzoMedio: 0 };
   var precedente = mappa[periodoAdiacente(chiaveOra, periodo, -1)] || null;
 
@@ -1279,6 +1336,10 @@ def genera(percorso_db=None, apri_browser=True):
     try:
         oggi = datetime.now()
         magazzino = estrai_magazzino(conn, oggi)
+        # Effetto collaterale isolato qui (non dentro estrai_*): registra i
+        # prezzi correnti nello storico proprio del Cruscotto e annota le righe.
+        storico_prezzi = aggiorna_storico_prezzi(magazzino, oggi)
+        annota_storico_prezzi(magazzino, storico_prezzi)
         n_materiali = max(len(magazzino), 1)
         n_autonomia = max(len([m for m in magazzino if m["dati_sufficienti"] and m["giorni_autonomia_stimati"] is not None]), 1)
         dati = {
@@ -1307,6 +1368,7 @@ def genera(percorso_db=None, apri_browser=True):
         TAG_CHARTJS=tag_chartjs,
         JSON_DATI=json_dati,
         DATA_GENERAZIONE=oggi.strftime("%d/%m/%Y %H:%M"),
+        DATA_ISO=oggi.isoformat(),
         ALTEZZA_GRAFICO_MAGAZZINO=max(n_materiali * 26, 260),
         ALTEZZA_GRAFICO_AUTONOMIA=max(n_autonomia * 26, 260),
     )
@@ -1321,10 +1383,32 @@ def genera(percorso_db=None, apri_browser=True):
     with open(percorso_ultimo, "w", encoding="utf-8") as f:
         f.write(html)
 
+    _pulisci_report_vecchi(cartella_report)
+
     if apri_browser:
         webbrowser.open("file://" + os.path.abspath(percorso_ultimo))
 
     return percorso_ultimo
+
+
+def _pulisci_report_vecchi(cartella_report, da_mantenere=30):
+    """Tiene solo gli ultimi ``da_mantenere`` report datati (piu' ``ultimo.html``).
+
+    Ne viene generato uno per ogni esecuzione: senza pulizia la cartella
+    crescerebbe all'infinito. Non tocca ``ultimo.html`` ne' file estranei.
+    """
+    try:
+        datati = sorted(
+            f for f in os.listdir(cartella_report)
+            if f.startswith("report_") and f.endswith(".html")
+        )
+    except OSError:
+        return
+    for nome in datati[:-da_mantenere] if len(datati) > da_mantenere else []:
+        try:
+            os.remove(os.path.join(cartella_report, nome))
+        except OSError:
+            pass
 
 
 def main():
@@ -1336,7 +1420,30 @@ def main():
         percorso = genera(percorso_db=percorso_db, apri_browser=apri_browser)
         print("Report generato:", percorso)
     except ConfigDbError as e:
+        # Problema di configurazione (database non trovato / non valido): il
+        # messaggio e' gia' pensato per l'utente finale, lo mostriamo cosi'.
         print("Errore:", e)
+        _log("ConfigDbError: " + str(e))
+        sys.exit(1)
+    except sqlite3.Error as e:
+        # Il database esiste ma qualcosa nella lettura e' andato storto (es.
+        # lo schema del gestionale e' cambiato e manca una colonna attesa).
+        print(
+            "Errore nella lettura del database: "
+            + str(e)
+            + "\nControlla che il gestionale RCS sia aggiornato. Dettagli in "
+            + LOG_PATH
+        )
+        _log("sqlite3.Error: " + str(e), traceback.format_exc())
+        sys.exit(1)
+    except Exception as e:  # noqa: BLE001 - ultima rete di sicurezza per l'utente finale
+        # Qualunque altro imprevisto: non lasciamo un traceback grezzo a un
+        # utente non tecnico, ma lo salviamo nel log per la diagnosi.
+        print(
+            "Si e' verificato un errore imprevisto. Il report non e' stato "
+            "generato.\nDettagli tecnici salvati in " + LOG_PATH
+        )
+        _log("Errore imprevisto: " + str(e), traceback.format_exc())
         sys.exit(1)
 
 
