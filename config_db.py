@@ -95,6 +95,22 @@ def _valida_tabelle(percorso):
         )
 
 
+def cambia_percorso_db():
+    """Forza la scelta di un nuovo database (selettore grafico), lo valida e
+    sovrascrive ``config.json``. A differenza di :func:`risolvi_percorso_db`,
+    non guarda mai la configurazione esistente: serve per cambiare database
+    esplicitamente in qualsiasi momento, non solo al primo avvio.
+    """
+    percorso = _percorso_da_selettore()
+    if percorso is None:
+        raise ConfigDbError(
+            "Nessun file selezionato: il database configurato resta quello precedente."
+        )
+    _valida_tabelle(percorso)
+    _salva_config(percorso)
+    return percorso
+
+
 def risolvi_percorso_db():
     """Trova il database: prima ``config.json``, poi il selettore grafico.
 

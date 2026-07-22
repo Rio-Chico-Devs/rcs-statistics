@@ -5,8 +5,9 @@ database del gestionale RCS. Nessun server, nessun build step, nessuna
 dipendenza oltre la libreria standard.
 
 Uso:
-    python3 cruscotto.py            # genera e apre il report nel browser
-    python3 cruscotto.py --no-open  # genera senza aprire il browser
+    python3 cruscotto.py             # genera e apre il report nel browser
+    python3 cruscotto.py --no-open   # genera senza aprire il browser
+    python3 cruscotto.py --cambia-db # sceglie un altro database e genera
 """
 
 import json
@@ -17,7 +18,7 @@ import webbrowser
 from datetime import datetime
 from string import Template
 
-from config_db import ConfigDbError, apri_db_sola_lettura, risolvi_percorso_db
+from config_db import ConfigDbError, apri_db_sola_lettura, cambia_percorso_db, risolvi_percorso_db
 
 CARTELLA_PROGETTO = os.path.dirname(os.path.abspath(__file__))
 
@@ -1206,7 +1207,10 @@ def genera(percorso_db=None, apri_browser=True):
 def main():
     apri_browser = "--no-open" not in sys.argv
     try:
-        percorso = genera(apri_browser=apri_browser)
+        percorso_db = cambia_percorso_db() if "--cambia-db" in sys.argv else None
+        if percorso_db:
+            print("Nuovo database selezionato:", percorso_db)
+        percorso = genera(percorso_db=percorso_db, apri_browser=apri_browser)
         print("Report generato:", percorso)
     except ConfigDbError as e:
         print("Errore:", e)
