@@ -1,0 +1,6 @@
+config.json
+notiziario_ultimo.json
+report/
+assets/
+__pycache__/
+*.pyc
