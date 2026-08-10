@@ -1,8 +1,20 @@
+# Configurazione locale (contiene il percorso del database di questo PC)
 config.json
-notiziario_ultimo.json
-storico_prezzi.json
-cruscotto.log
+
+# Dati prodotti dal programma
 report/
+storico_prezzi.json
+notiziario_ultimo.json
+cruscotto.log
+
+# Cache di Chart.js scaricata al primo avvio (assets_web/ invece e' sorgente)
 assets/
+
+# Python
 __pycache__/
 *.pyc
+
+# Compilazione con PyInstaller
+build/
+dist/
+*.spec

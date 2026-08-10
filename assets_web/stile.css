@@ -1,0 +1,163 @@
+/* Cruscotto Aziendale RCS - foglio di stile del report.
+   File separato dal Python: si legge, si modifica e si evidenzia come CSS
+   vero. Viene incorporato nel report al momento della generazione, quindi il
+   file HTML finale resta unico e autosufficiente. */
+
+:root {
+  --bg: #0d1117;
+  --card: #151c25;
+  --card2: #1a222d;
+  --bordo: #25303d;
+  --testo: #e6edf3;
+  --muto: #8b97a5;
+  --accento: #f0b429;
+  --teal: #43c6b9;
+  --verde: #4ec97b;
+  --rosso: #ef6a6a;
+  --blu: #6aa9ef;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image:
+    repeating-linear-gradient(45deg, rgba(255,255,255,.014) 0px, rgba(255,255,255,.014) 1px, transparent 1px, transparent 12px),
+    repeating-linear-gradient(-45deg, rgba(255,255,255,.014) 0px, rgba(255,255,255,.014) 1px, transparent 1px, transparent 12px);
+  color: var(--testo);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  line-height: 1.5;
+}
+
+.contenitore { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; }
+.num, .valore { font-variant-numeric: tabular-nums; }
+
+/* --- Testata ------------------------------------------------------------ */
+header.testata {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px; padding: 18px 0 28px;
+}
+.logo { font-size: 20px; font-weight: 600; letter-spacing: .3px; }
+.logo span { color: var(--accento); }
+.meta-testata { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.data-generazione { color: var(--muto); font-size: 13px; }
+
+.selettore-periodo {
+  display: flex; gap: 6px; background: var(--card);
+  border: 1px solid var(--bordo); border-radius: 999px; padding: 4px;
+}
+.pill {
+  border: none; background: transparent; color: var(--muto); font-size: 13px;
+  padding: 7px 16px; border-radius: 999px; cursor: pointer; transition: .2s;
+  font-family: inherit;
+}
+.pill.attiva { background: var(--accento); color: #14100a; font-weight: 600; }
+.pill:not(.attiva):hover { color: var(--testo); }
+.pill:focus-visible, .riga-materiale:focus-visible { outline: 2px solid var(--accento); outline-offset: 2px; }
+
+/* --- Sezioni ------------------------------------------------------------ */
+.sezione {
+  background: var(--card); border: 1px solid var(--bordo); border-radius: 16px;
+  padding: 22px 24px; margin-bottom: 20px;
+  opacity: 0; transform: translateY(14px);
+  transition: opacity .55s ease, transform .55s ease;
+}
+.sezione.visibile { opacity: 1; transform: translateY(0); }
+.sezione h2 {
+  margin: 0 0 16px; font-size: 16px; font-weight: 600;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.sezione h2::before {
+  content: ""; width: 3px; height: 16px; background: var(--accento);
+  border-radius: 999px; display: inline-block; flex: none;
+}
+.nota-periodo { color: var(--muto); font-weight: 400; font-size: 12.5px; }
+
+.griglia-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+@media (max-width: 900px) { .griglia-2 { grid-template-columns: 1fr; } }
+
+/* --- KPI ---------------------------------------------------------------- */
+.griglia-kpi { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; margin-bottom: 20px; }
+@media (max-width: 1000px) { .griglia-kpi { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 620px) { .griglia-kpi { grid-template-columns: repeat(2, 1fr); } }
+
+.kpi {
+  background: var(--card); border: 1px solid var(--bordo); border-radius: 14px; padding: 16px;
+  opacity: 0; transform: translateY(10px); transition: opacity .5s ease, transform .5s ease;
+}
+.kpi.visibile { opacity: 1; transform: translateY(0); }
+.kpi .etichetta { color: var(--muto); font-size: 12px; margin-bottom: 8px; }
+.kpi .valore { font-size: 24px; font-weight: 700; }
+
+.delta { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
+.kpi .delta { margin-top: 6px; }
+.delta.su { color: var(--verde); }
+.delta.giu { color: var(--rosso); }
+.delta.neutro { color: var(--muto); }
+
+/* --- Blocchi di sintesi ------------------------------------------------- */
+.blocchi-sintesi { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 900px) { .blocchi-sintesi { grid-template-columns: 1fr; } }
+.blocco-sintesi { background: var(--card2); border: 1px solid var(--bordo); border-radius: 12px; padding: 16px; }
+.blocco-sintesi h3 { margin: 0 0 10px; font-size: 13.5px; display: flex; align-items: center; gap: 8px; }
+.blocco-sintesi.forza h3::before { content: "\25B2"; color: var(--verde); font-size: 11px; }
+.blocco-sintesi.attenzione h3::before { content: "\25CF"; color: var(--accento); font-size: 11px; }
+.blocco-sintesi.cambi h3::before { content: "\25C6"; color: var(--teal); font-size: 11px; }
+.blocco-sintesi ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--testo); }
+.blocco-sintesi li { margin-bottom: 6px; }
+.blocco-sintesi li:last-child { margin-bottom: 0; }
+.blocco-sintesi .vuoto { color: var(--muto); font-style: italic; font-size: 13px; }
+
+/* --- Grafici ------------------------------------------------------------ */
+.contenitore-grafico { position: relative; width: 100%; }
+
+/* --- Tabelle ------------------------------------------------------------ */
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--bordo); }
+th { color: var(--muto); font-weight: 600; font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; }
+td.num, th.num { text-align: right; }
+tbody tr:last-child td { border-bottom: none; }
+.tabella-scroll { overflow-x: auto; }
+.riga-materiale { cursor: pointer; }
+.riga-materiale:hover { background: var(--card2); }
+.riga-dettaglio > td { background: var(--card2); font-size: 12.5px; color: var(--muto); }
+.riga-dettaglio dl { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px 20px; }
+.riga-dettaglio dt { color: var(--muto); font-size: 11px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
+.riga-dettaglio dd { margin: 0; color: var(--testo); font-variant-numeric: tabular-nums; }
+
+/* --- Etichette di stato -------------------------------------------------- */
+.tag { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+.tag.ok { background: rgba(78,201,123,.14); color: var(--verde); }
+.tag.basso { background: rgba(239,106,106,.14); color: var(--rosso); }
+.tag.medio { background: rgba(240,180,41,.14); color: var(--accento); }
+.tag.carico { background: rgba(106,169,239,.14); color: var(--blu); }
+.tag.scarico { background: rgba(139,151,165,.14); color: var(--muto); }
+.testo-muto { color: var(--muto); }
+
+/* --- Notiziario e note --------------------------------------------------- */
+.notizia { border-left: 3px solid var(--teal); background: var(--card2); border-radius: 0 10px 10px 0; padding: 12px 16px; margin-bottom: 12px; }
+.notizia:last-child { margin-bottom: 0; }
+.notizia .fonte { color: var(--muto); font-size: 11.5px; margin-top: 6px; }
+.rilevanza { color: var(--accento); font-style: italic; font-size: 12.5px; margin-top: 6px; }
+.suggerimento { border: 1px dashed var(--bordo); border-radius: 10px; padding: 14px 16px; color: var(--muto); font-size: 13px; }
+
+footer.piede { text-align: center; color: var(--muto); font-size: 12px; padding: 24px 0 6px; }
+
+/* --- Stampa -------------------------------------------------------------- */
+/* Il report finisce spesso stampato o salvato in PDF per la riunione:
+   sfondo chiaro, niente animazioni d'ingresso, sezioni non spezzate a meta'. */
+@media print {
+  body { background: #fff; color: #111; }
+  .sezione, .kpi { opacity: 1 !important; transform: none !important; background: #fff; border-color: #ccc; break-inside: avoid; }
+  .selettore-periodo, .riga-dettaglio { display: none !important; }
+  .testo-muto, .nota-periodo, th { color: #555; }
+  .kpi .valore, .blocco-sintesi ul, .riga-dettaglio dd { color: #111; }
+  .blocco-sintesi { background: #fafafa; border-color: #ddd; }
+}
+
+/* Chi preferisce meno movimento (impostazione di sistema) non deve subire
+   animazioni: mostriamo tutto subito. */
+@media (prefers-reduced-motion: reduce) {
+  .sezione, .kpi { opacity: 1 !important; transform: none !important; transition: none !important; }
+}

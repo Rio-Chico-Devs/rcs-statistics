@@ -1,3 +1,34 @@
 {
-  "db_path": "C:/percorso/al/database/materiali.db"
+  "_come_si_usa": "Copia questo file come config.json e metti il percorso del tuo database. La sezione impostazioni e' facoltativa: togli le righe che non ti servono e valgono i valori predefiniti.",
+
+  "db_path": "C:/percorso/al/gestionale/data/materiali.db",
+
+  "impostazioni": {
+    "_giorni_allarme_esaurimento": "sotto quanti giorni di autonomia un materiale e' in allarme rosso",
+    "giorni_allarme_esaurimento": 14,
+
+    "_giorni_attenzione_esaurimento": "sotto quanti giorni passa in giallo",
+    "giorni_attenzione_esaurimento": 30,
+
+    "_lead_time_default_giorni": "tempo di consegna presunto quando non ci sono abbastanza carichi passati per calcolarlo dai dati",
+    "lead_time_default_giorni": 14,
+
+    "_movimenti_minimi": "quanti movimenti servono prima di fidarsi delle stime su un materiale",
+    "movimenti_minimi": 4,
+
+    "_giorni_storico_minimi": "da quanti giorni deve essere seguito un materiale prima di stimarne il consumo",
+    "giorni_storico_minimi": 14,
+
+    "_soglia_aumento_prezzo_pct": "oltre questo aumento percentuale il prezzo fornitore finisce nei consigli",
+    "soglia_aumento_prezzo_pct": 8,
+
+    "_soglia_risparmio_fornitore_pct": "oltre questo risparmio si consiglia di cambiare fornitore",
+    "soglia_risparmio_fornitore_pct": 15,
+
+    "_max_consigli_per_tipo": "quanti consigli mostrare al massimo per ogni tipo",
+    "max_consigli_per_tipo": 3,
+
+    "_report_da_mantenere": "quanti report datati tenere nella cartella report/",
+    "report_da_mantenere": 30
+  }
 }
